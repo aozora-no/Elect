@@ -44,10 +44,10 @@ void loop() {
         char c = client.read();
         header += c;
 
-        // If we've reached the end of the HTTP request header (blank line)
+       
         if (c == '\n') {
           if (currentLine.length() == 0) {
-            // Decide response based on requested path
+            
             if (header.indexOf("GET /running") >= 0) {
               mode = "RUNNING";
             } else if (header.indexOf("GET /high") >= 0) {
@@ -58,7 +58,7 @@ void loop() {
               mode = "OFF";
               allLow();
             } else if (header.indexOf("GET /status") >= 0) {
-              // Simple status endpoint used by the front-end JS
+              
               client.println("HTTP/1.1 200 OK");
               client.println("Content-type: text/plain");
               client.println("Connection: close");
