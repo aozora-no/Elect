@@ -1,17 +1,17 @@
 #include <WiFi.h>
 #include <WebServer.h>
 
-// === WIFI SETTINGS ===
-const char* ssid = "Reconnecting....";   // Your WiFi SSID
-const char* password = "https://Nuqui "; // Your WiFi password
 
-// === WEB SERVER ===
+const char* ssid = "Reconnecting....";  
+const char* password = "https://Nuqui "; 
+
+/
 WebServer server(80);
 
-// === PINS ===
-const int analogPin = 32;   // Soil AO
-const int digitalPin = 25;  // Soil DO
-const int pumpPin    = 26;  // Relay IN
+
+const int analogPin = 32;
+const int digitalPin = 25; 
+const int pumpPin    = 26; 
 
 const int PUMP_ON  = HIGH;
 const int PUMP_OFF = LOW;
@@ -26,10 +26,10 @@ bool pumpRunning = false;
 bool isDry = true;
 int wateringCount = 0;
 
-// === MANUAL SYSTEM TOGGLE ===
-bool systemEnabled = true;  // Toggle ON/OFF from web interface
 
-// === HTML PAGE ===
+bool systemEnabled = true;
+
+
 const char htmlPage[] PROGMEM = R"rawliteral(
 <!DOCTYPE html>
 <html lang="en">
@@ -110,7 +110,7 @@ h1 { font-size:28px; font-weight:600; margin-bottom:8px; text-align:center; }
 </head>
 <body>
 <div class="container">
-<h1>💧 Water Dispenser</h1>
+<h1> Water Dispenser</h1>
 <p class="subtitle">Automatic Plant Watering System</p>
 <div class="welcome-section">
 <div class="welcome-text">Welcome back, Today is <span id="welcomeDateTime"></span></div>
@@ -192,7 +192,7 @@ function toggleSystem() {
     }
 }
 
-// Manual Water Button
+
 document.getElementById('waterNowBtn').addEventListener('click', async () => {
     fetch('/command?action=WATER');
 });
@@ -209,7 +209,7 @@ void setup() {
   pinMode(pumpPin, OUTPUT);
   digitalWrite(pumpPin, PUMP_OFF);
 
-  // Connect to WiFi
+  
   WiFi.begin(ssid, password);
   Serial.print("Connecting to WiFi");
   while (WiFi.status() != WL_CONNECTED) {
@@ -221,12 +221,12 @@ void setup() {
   Serial.print("IP address: ");
   Serial.println(WiFi.localIP());
 
-  // Serve the HTML page
+  
   server.on("/", HTTP_GET, []() {
     server.send(200, "text/html", htmlPage);
   });
 
-  // Command endpoint
+  
   server.on("/command", HTTP_GET, []() {
     String action = server.arg("action");
     if(action == "WATER") {
@@ -234,11 +234,11 @@ void setup() {
     } 
     else if(action == "ON") {
       systemEnabled = true;
-      startPump(); // Immediately turn on pump
+      startPump();
     } 
     else if(action == "OFF") {
       systemEnabled = false;
-      stopPump();  // Immediately stop pump
+      stopPump();
     }
     server.send(200, "application/json",
                 String("{\"moisture\":\"") + (isDry ? "dry" : "wet") +
@@ -251,24 +251,21 @@ void setup() {
 void loop() {
   server.handleClient();
 
-  // Read soil
   int soilDO = digitalRead(digitalPin);
   isDry = (soilDO == HIGH);
 
   unsigned long now = millis();
 
-  // Auto water ONLY if systemEnabled
   if (systemEnabled && !pumpRunning && isDry && (now - lastPump >= MIN_INTERVAL_MS)) {
     startPump();
   }
 
-  // Stop pump after duration
   if (pumpRunning && (now - pumpStart >= PUMP_DURATION_MS)) {
     stopPump();
   }
 }
 
-// === PUMP CONTROL FUNCTIONS ===
+
 void startPump() {
   pumpRunning = true;
   pumpStart = millis();
