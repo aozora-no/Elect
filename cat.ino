@@ -52,7 +52,7 @@ const int SERVO_MAX_PULSE_US = 2400;
 
 // Auto-dispense state machine variables (non-blocking)
 bool dispensingActive = false;        // true while auto-dispensing cycles are running
-uint8_t dispenseState = 0;            // 0=idle, 1=moved out, 2=holding out, 3=moved back (rest), 4=holding back
+uint8_t dispenseState = 0;            // 0=idle, 1=moved out, 2=holding out, 3=moved back (rest)
 unsigned long dispenseLastMillis = 0; // timestamp of last state change
 
 // Durations for each state (ms)
@@ -62,6 +62,27 @@ const float HYSTERESIS = 8.0;            // grams above threshold to stop auto-d
 
 // Send DB only when starting/stopping auto-dispense or on manual dispense
 bool autoReportedAsDispensed = false;
+
+// Track attachment state to detach when idle (stop holding torque / noise)
+bool servoAttached = false;
+
+void attachServo() {
+  if (!servoAttached) {
+    myservo.attach(SERVO_PIN, SERVO_MIN_PULSE_US, SERVO_MAX_PULSE_US);
+    servoAttached = true;
+    // small settle delay can help hardware
+    delay(20);
+  }
+}
+
+void detachServo() {
+  if (servoAttached) {
+    myservo.detach();
+    servoAttached = false;
+    // short delay to allow motor to stop drawing/sounding
+    delay(5);
+  }
+}
 
 void sendToDatabase(const String &feedingType, bool dispensed) {
   if (WiFi.status() != WL_CONNECTED) {
@@ -525,14 +546,17 @@ void handleToggle() {
   server.send(200, "text/plain", autoDispenseEnabled ? "ON" : "OFF");
 }
 
-// Manual single dispense (blocking as requested)
+// Manual single dispense (blocking as requested) — attach, move, detach
 void performManualDispense(bool reportToDB) {
   int dispenseAngle = constrain(SERVO_DISPENSE_ANGLE, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
   int restAngle    = constrain(SERVO_REST_ANGLE, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
 
+  attachServo();
   myservo.write(dispenseAngle);
   delay(400); // user requested behavior: short blocking movement
   myservo.write(restAngle);
+  delay(120); // give servo time to reach rest
+  detachServo();
 
   if (reportToDB) sendToDatabase("manual", true);
 }
@@ -556,11 +580,17 @@ void stopAutoDispense() {
   if (dispensingActive) {
     dispensingActive = false;
     dispenseState = 0;
-    // return to rest
+    // ensure servo goes to rest and detach to remove holding torque/sound
+    attachServo();
     myservo.write(constrain(SERVO_REST_ANGLE, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE));
+    delay(120);
+    detachServo();
     // report stop (optional): send a status update
     sendToDatabase("auto", false);
     Serial.println("Auto-dispense STOPPED");
+  } else {
+    // also ensure servo is detached when auto disabled
+    detachServo();
   }
 }
 
@@ -578,10 +608,12 @@ void setup() {
     Serial.println("HX711 ready");
   }
 
-  // Servo - attach with pulse range; ensure the rest position is safe
+  // Servo - attach briefly to move to rest, then detach to avoid idle sound
   myservo.setPeriodHertz(50);
-  myservo.attach(SERVO_PIN, SERVO_MIN_PULSE_US, SERVO_MAX_PULSE_US);
+  attachServo();
   myservo.write(constrain(SERVO_REST_ANGLE, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE));
+  delay(150);
+  detachServo();
 
   // Display
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
@@ -628,7 +660,7 @@ void loop() {
   // Ensure non-negative reading (adjust depending on your wiring/calibration)
   currentWeight = rawWeight >= 0 ? rawWeight : 0.0;
 
-  // If auto mode enabled and weight low, start auto-dispensing; if weight is sufficient, stop.
+  // Auto mode control: start/stop dispensing based on weight
   if (autoDispenseEnabled) {
     if (currentWeight <= lowFoodThreshold) {
       startAutoDispense();
@@ -637,8 +669,9 @@ void loop() {
       stopAutoDispense();
     }
   } else {
-    // if auto disabled, ensure auto-dispensing is stopped
+    // if auto disabled, ensure auto-dispensing is stopped and servo detached
     if (dispensingActive) stopAutoDispense();
+    else detachServo();
   }
 
   // Non-blocking state machine: run dispensing cycles while dispensingActive is true.
@@ -646,6 +679,7 @@ void loop() {
     unsigned long now = millis();
     switch (dispenseState) {
       case 1: // move out (start of cycle)
+        attachServo();
         myservo.write(constrain(SERVO_DISPENSE_ANGLE, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE));
         dispenseLastMillis = now;
         dispenseState = 2;
@@ -667,18 +701,27 @@ void loop() {
 
       case 3: // holding back between cycles
         if (now - dispenseLastMillis >= HOLD_BACK_MS) {
-          // start next cycle (move out again)
-          dispenseState = 1;
+          // detach to stop holding torque (removes sound) while waiting to start next cycle
+          detachServo();
+          // start next cycle (move out again) only if still low
+          if (currentWeight <= lowFoodThreshold) {
+            dispenseState = 1;
+          } else {
+            // if weight no longer low, stop dispensing
+            stopAutoDispense();
+          }
         }
         break;
 
       default:
-        // safety: go to rest
+        // safety: go to rest and detach
+        attachServo();
         myservo.write(constrain(SERVO_REST_ANGLE, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE));
+        delay(50);
+        detachServo();
         dispenseState = 0;
         break;
     }
-    // (Note: during auto-dispense we do not block with delays)
   }
 
   // Update OLED display
